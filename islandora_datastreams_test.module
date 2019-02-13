@@ -1,0 +1,174 @@
+<?php
+
+function islandora_datastreams_test_menu() {
+  $items = array();
+
+  // Slideshow manage page.
+  $items['admin/config/user-interface/slideshow'] = array(
+    'title' => 'Slideshow',
+    'description' => 'Manage slideshow list.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('islandora_datastreams_test_manage'),
+    'access arguments' => array('administer content'),
+  );
+
+  // Autocomplete callback.
+  $items['slideshow/autocomplete'] = array(
+    'page callback' => 'islandora_datastreams_test_autocomplete',
+    'access arguments' => array('administer content'),
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+function islandora_datastreams_test_mods_schema_check($mods_filename) {
+  // For example, if you did not want to import any MODS that contained the
+  // word "foobar", code it like this:
+  $mods_contents = file_get_contents($mods_filename);
+  return (strstr($mods_contents, "foobar") <> '');
+}
+
+// Implements hook_theme().
+function islandora_datastreams_test_theme($existing, $type, $theme, $path) {
+  return array(
+    'islandora_datastreams_test_manage' => array(
+      'render element' => 'form',
+    ),
+  );
+}
+
+function islandora_datastreams_test_manage() {
+  $slides = variable_get('islandora_datastreams_test_slides', array());
+
+  // Empty row for new slide input.
+  $slides[] = array('nid' => 0, 'caption' => '', 'weight' => 0);
+  $form['#tree'] = TRUE;
+  foreach ($slides as $id => $slide) {
+    if (!empty($slide['nid'])) {
+      $node = node_load($slide['nid']);
+    }
+    else {
+      $node = (object)array('title' => '');
+    }
+
+    // Textfield to hold content id.
+    $form['slides'][$slide['nid']]['node'] = array(
+      '#type' => 'textfield',
+      '#autocomplete_path' => 'ui-slideshow/autocomplete',
+      '#default_value' => check_plain($node->title) . (!empty($node->nid) ? " [$node->nid]" : ''),
+    );
+    // Caption for the slideshow.
+    $form['slides'][$slide['nid']]['caption'] = array(
+      '#type' => 'textfield',
+      '#default_value' => $slide['caption'],
+    );
+    // This field is invisible, but contains sort info (weights).
+    $form['slides'][$slide['nid']]['weight'] = array(
+      '#type' => 'weight',
+      '#title' => t('Weight'),
+      '#title_display' => 'invisible',
+      '#default_value' => $slide['weight'],
+    );
+    // Operation links (to remove rows).
+    $form['slides'][$slide['nid']]['op'] = array(
+      '#markup' => '<a href="#" class="remove-row">' . t('Remove') . '</a>',
+    );
+  }
+
+  // jQuery to implement remove feature. Setting the text field to empty
+  // and submitting the form will remove the rows.
+  $js = <<<EOD
+(function ($) {
+  $(function() {
+    $('a.remove-row').click(function() {
+      $(this).closest('tr').fadeOut(function() {
+        $(this).find('input.form-autocomplete').val('')
+          .closest('form').submit();
+      });
+    });;
+  });
+})(jQuery);
+EOD;
+
+  drupal_add_js($js, array('type' => 'inline'));
+
+  $form['submit'] = array('#type' => 'submit', '#value' => t('Save changes'));
+
+  return $form;
+}
+
+function islandora_datastreams_test_manage_submit($form, &$form_state) {
+  $slides = array();
+  foreach ($form_state['values']['slides'] as $slide) {
+    $nid = $slide['caption'];
+//    preg_match('/\[(\d+)\]$/', $slide['node'], $matches);
+//    if ($nid = !empty($matches[1]) ? (int)$matches[1] : 0) {
+      $slides[] = array(
+        'nid' => $nid,
+        'caption' => $slide['caption'],
+        'weight' => $slide['weight'],
+      );
+//    }
+  }
+
+  if (!empty($slides)) {
+    usort($slides, '_islandora_datastreams_test_arraysort');
+  }
+  variable_set('islandora_datastreams_test_slides', $slides);
+  drupal_set_message(t('Slides have been saved.'));
+}
+// Custom array sort function by weight.
+function _islandora_datastreams_test_arraysort($a, $b) {
+  if (isset($a['weight']) && isset($b['weight'])) {
+    return $a['weight'] < $b['weight'] ? -1 : 1;
+  }
+  return 0;
+}
+
+// Search titles of article and page contents.
+function islandora_datastreams_test_autocomplete($string) {
+  $query = db_select('node', 'n');
+  $query->fields('n', array('nid', 'title'));
+
+
+  $result = $query
+    ->condition('n.title', '%' . db_like($string) . '%', 'LIKE')
+    ->range(0, 10)
+    ->execute();
+
+  $matches = array();
+  foreach ($result as $row) {
+    $matches[$row->title . " [$row->nid]"] = check_plain($row->title) . " [$row->nid]";
+  }
+
+  drupal_json_output($matches);
+}
+
+function theme_islandora_datastreams_test_manage($variables) {
+  $form = $variables['form'];
+
+  $rows = array();
+  foreach (element_children($form['slides']) as $nid) {
+    $form['slides'][$nid]['weight']['#attributes']['class'] = array('slides-order-weight');
+    $rows[] = array(
+      'data' => array(
+        array('class' => array('slide-cross')),
+        drupal_render($form['slides'][$nid]['node']),
+        drupal_render($form['slides'][$nid]['caption']),
+        drupal_render($form['slides'][$nid]['weight']),
+        drupal_render($form['slides'][$nid]['op']),
+      ),
+      'class' => array('draggable'),
+    );
+  }
+
+  $header = array('', t('Content'), t('Caption (If empty, title is used)'), t('Weight'), t('Operations'));
+  $output = drupal_render($form['note']);
+  $output .= theme('table', array('header' => $header, 'rows' => $rows, 'attributes' => array('id' => 'slides-order')));
+  $output .= drupal_render_children($form);
+
+  drupal_add_tabledrag('slides-order', 'order', 'sibling', 'slides-order-weight');
+
+  return $output;
+}

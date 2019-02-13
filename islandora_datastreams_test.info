@@ -1,0 +1,6 @@
+name = Islandora Datastreams IO TEST HOOK
+package = Islandora Tools
+description = To add a function that responds to the MODS schema test hook for "hook_mods_schema_check ONLY" from islandora_datastreams_io.
+dependencies[] = islandora_datastreams_io
+version = 7.x
+core = 7.x
